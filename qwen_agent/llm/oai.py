@@ -166,14 +166,28 @@ class TextChatAtOAI(BaseFnCallModel):
         messages = self.convert_messages_to_dicts(messages)
         try:
             response = self._chat_complete_create(model=self.model, messages=messages, stream=False, **generate_cfg)
-            if hasattr(response.choices[0].message, 'reasoning_content'):
+            message = response.choices[0].message
+            reasoning_content = getattr(message, 'reasoning_content', None)
+            tool_calls = getattr(message, 'tool_calls', None) or []
+
+            if tool_calls:
+                # One message per tool call, mirroring the streaming path (_chat_stream):
+                # a reply may carry BOTH reasoning_content and tool_calls, and dropping
+                # the tool calls leaves the agent unable to act on the request.
                 return [
                     Message(role=ASSISTANT,
-                            content=response.choices[0].message.content,
-                            reasoning_content=response.choices[0].message.reasoning_content)
+                            content='',
+                            reasoning_content=reasoning_content,
+                            function_call=FunctionCall(name=tc.function.name, arguments=tc.function.arguments),
+                            extra={'function_id': tc.id})
+                    for tc in tool_calls
                 ]
-            else:
-                return [Message(role=ASSISTANT, content=response.choices[0].message.content)]
+
+            return [
+                Message(role=ASSISTANT,
+                        content=message.content,
+                        reasoning_content=reasoning_content)
+            ]
         except OpenAIError as ex:
             raise ModelServiceError(exception=ex)
 
